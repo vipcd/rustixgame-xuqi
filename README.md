@@ -21,8 +21,8 @@
 
 | Secret 名称 | 说明 | 示例值 |
 | :--- | :--- | :--- |
-| `TG_TOKEN` | 你的 Telegram Bot Token | `8986200732:AAEbgl3...` |
-| `TG_CHAT_ID` | 你的 Telegram 用户 ID | `7748183664` |
+| `TG_TOKEN` | 你的 Telegram Bot Token | `xxx` |
+| `TG_CHAT_ID` | 你的 Telegram 用户 ID | `xxxxx` |
 | `ACCOUNTS_JSON` | 账号密码列表 (JSON 格式) | `[{"user":"A@mail.com","pwd":"123"},{"user":"B@mail.com","pwd":"456"}]` |
 
 ## ！！ 注意  这里的账户是你的登录邮箱，密码是面板密码不是登录账号的密码。
