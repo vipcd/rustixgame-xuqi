@@ -27,3 +27,4 @@
 
 ## ！！ 注意  这里的账户是你的登录邮箱，密码是面板密码不是登录账号的密码。
 ### 面板密码在 https://rustix.me/me/settings 中重置，重置后面板密码会发到你的邮箱。
+![reset](https://github.com/zhisibi/rustixreautostart/blob/main/passwdreset.jpg)
