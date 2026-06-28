@@ -3,7 +3,7 @@ name: Rustix Auto Restart
 on:
   schedule:
     # 每小时运行一次
-    - cron: '0 */1 * * *'
+    - cron: '02 */1 * * *'
   workflow_dispatch: # 允许手动触发
 
 jobs:
