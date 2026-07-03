@@ -3,12 +3,17 @@ name: Rustix Auto Restart
 on:
   schedule:
     # 每小时运行一次
-    - cron: '02 */1 * * *'
+    - cron: '22 */2 * * *'
   workflow_dispatch: # 允许手动触发
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
+    # 赋予工作流删除历史记录的权限
+    permissions:
+      actions: write
+      contents: read
+      
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -29,3 +34,12 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
         run: python rustix.py
+
+      # 新增：自动删除旧的工作流运行记录，仅保留最近的 1 条
+      - name: Delete old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 1
