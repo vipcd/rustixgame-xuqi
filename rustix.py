@@ -8,18 +8,9 @@ from playwright.async_api import async_playwright
 # --- 从环境变量读取敏感信息 ---
 TG_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
-# 预期的格式: [{"user": "...", "pwd": "..."}, {"user": "...", "pwd": "..."}]
 ACCOUNTS_JSON = os.environ.get("ACCOUNTS_JSON")
 
 LOGIN_URL = "https://my.rustix.me/auth/login"
-
-# ============================================================
-# ⚠️ 请注意：因为网站更新，下面这三个 XPath 大概率变了，需要你重新获取并替换！
-# ============================================================
-XPATH_MANAGE_LINK = '//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a'
-XPATH_STATUS_TEXT = '//*[@id="app"]/div[2]/div/div[2]/div[2]/div[3]/div/div/div[1]/div[1]/span'
-XPATH_RESTART_BTN = '//*[@id="app"]/div[2]/div/div[2]/div[2]/div[3]/div/div/div[2]/button[2]'
-# ============================================================
 
 def send_tg_message(text):
     """发送带 Markdown 格式的 Telegram 消息"""
@@ -38,7 +29,6 @@ def send_tg_message(text):
 async def process_account(account):
     """处理单个账户的逻辑"""
     async with async_playwright() as p:
-        # 在 GitHub Actions 中建议开启 headless=True
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context()
         page = await context.new_page()
@@ -46,57 +36,60 @@ async def process_account(account):
         print(f"\n>>> 开始处理账户: {account['user']}")
         await page.goto(LOGIN_URL)
 
-        # 1. 登录
+        # 1. 登录（这两行原本就是正常的，保留）
         await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[1]/div/input', account['user'])
         await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[2]/div[2]/div/div/input', account['pwd'])
         await page.click('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[4]/button')
 
-        # 2. 进入管理页
-        try:
-            await page.wait_for_selector('section', timeout=30000)
-            await page.click(XPATH_MANAGE_LINK)
-            print("点击了进入管理页面链接，等待页面加载...")
-        except Exception as e:
-            print(f"❌ 无法点击进入管理页链接: {e}")
-            await page.screenshot(path="error_enter_manage.png")
-            raise e
+        # 2. 进入管理页（这一行原本也是正常的，保留）
+        await page.wait_for_selector('section', timeout=30000)
+        await page.click('//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a')
+        print("已进入管理页面，等待加载状态...")
 
-        # 3. 智能等待状态元素出现 (代替原本死等30秒的旧逻辑)
-        print("🔍 正在定位服务器状态元素...")
+        # 3. 【全新逻辑】智能等待页面上的“Стоп(停止)”文字加载出来，说明控制台彻底打开了
+        print("🔍 正在等待控制台面板加载...")
         try:
-            # 缩短初始强制等待，直接依赖 wait_for_selector
-            await asyncio.sleep(5) 
-            await page.wait_for_selector(XPATH_STATUS_TEXT, timeout=25000)
-            status_text = await page.inner_text(XPATH_STATUS_TEXT)
+            # 只要红色的 🛑 Стоп 按钮加载出来，就代表页面妥了
+            await page.wait_for_selector('text=Стоп', timeout=25000)
         except Exception as e:
-            print(f"❌ 找不到服务器状态元素，可能网站结构已改变！正在保存错误截图...")
-            await page.screenshot(path="error_status_not_found.png")
+            print(f"❌ 页面加载超时，没看到控制台按钮。正在保存错误截图...")
+            await page.screenshot(path="error_page_load.png")
             raise e
         
-        # 4. 获取状态并判断
-        if status_text.strip() == "Online":
+        # 4. 【全新逻辑】直接抓取整个页面的所有文本
+        page_text = await page.locator('body').inner_text()
+        
+        # 5. 【全新逻辑】直接用文字匹配判断状态
+        if "Включён" in page_text:
+            print("🎉 服务器当前状态：Включён (运行中/Online)")
             send_tg_message(f"👤 账户: `{account['user']}`\n状态: *Online*\n操作: 无需重启。")
         else:
-            print(f"当前状态为: {status_text.strip()}，不是 Online，执行重启...")
+            print("⚠️ 当前状态不是 Включён，准备点击 🔄 Рестарт 按钮重启...")
             try:
-                await page.click(XPATH_RESTART_BTN)
+                # 谁带着“Рестарт”这几个字，就直接给它一脚（点击）
+                await page.locator('text=Рестарт').click()
+                print("✅ 已成功点击 Рестарт 按钮")
             except Exception as e:
                 print(f"❌ 点击重启按钮失败: {e}")
                 await page.screenshot(path="error_click_restart.png")
                 raise e
             
-            # 确认弹窗
-            confirm_btn = "//button[contains(text(), '确认') or contains(text(), 'Yes')]"
+            # 确认弹窗（顺便兼容俄语的“确认”叫 Да）
+            confirm_btn = "//button[contains(text(), '确认') or contains(text(), 'Yes') or contains(text(), 'Да')]"
             if await page.query_selector(confirm_btn):
                 await page.click(confirm_btn)
+                print("✅ 已点击弹窗确认")
             
             # 等待2分钟检查重启结果
+            print("⏳ 等待 2 分钟让服务器缓一缓...")
             await asyncio.sleep(120)
-            status_text_new = await page.inner_text(XPATH_STATUS_TEXT)
-            if status_text_new.strip() == "Online":
+            
+            # 重新检查页面文字
+            page_text_new = await page.locator('body').inner_text()
+            if "Включён" in page_text_new:
                 send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启成功 ✅\n状态: *Online*")
             else:
-                send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启后状态异常 ⚠️\n当前状态: {status_text_new.strip()}")
+                send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启后状态异常 ⚠️\n请手动登录检查。")
 
         print(f"账户 {account['user']} 操作完成。")
         await browser.close()
@@ -110,7 +103,7 @@ async def main():
         accounts = json.loads(ACCOUNTS_JSON)
         for account in accounts:
             await process_account(account)
-        send_tg_message("所有账户操作成功。 🎉")
+        send_tg_message("所有账户操作完毕。 🎉")
     except Exception as e:
         print(f"脚本运行错误: {str(e)}")
         send_tg_message(f"⚠️ 脚本运行出现错误，请检查 GitHub Actions 日志。\n错误详情: `{str(e)}`")
