@@ -36,45 +36,46 @@ async def process_account(account):
         print(f"\n>>> 开始处理账户: {account['user']}")
         await page.goto(LOGIN_URL)
 
-        # 1. 登录（这两行原本就是正常的，保留）
+        # 1. 登录
         await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[1]/div/input', account['user'])
         await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[2]/div[2]/div/div/input', account['pwd'])
         await page.click('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[4]/button')
 
-        # 2. 进入管理页（这一行原本也是正常的，保留）
+        # 2. 进入管理页
         await page.wait_for_selector('section', timeout=30000)
         await page.click('//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a')
         print("已进入管理页面，等待加载状态...")
 
-        # 3. 【全新逻辑】智能等待页面上的“Стоп(停止)”文字加载出来，说明控制台彻底打开了
+        # 3. 智能等待页面上的“Стоп(停止)”按钮加载出来，说明控制台彻底打开了
         print("🔍 正在等待控制台面板加载...")
         try:
-            # 只要红色的 🛑 Стоп 按钮加载出来，就代表页面妥了
             await page.wait_for_selector('text=Стоп', timeout=25000)
         except Exception as e:
             print(f"❌ 页面加载超时，没看到控制台按钮。正在保存错误截图...")
             await page.screenshot(path="error_page_load.png")
             raise e
         
-        # 4. 【全新逻辑】直接抓取整个页面的所有文本
+        # 4. 【优化】稍微等 2 秒，确保状态文本和按钮状态彻底刷新完毕
+        await asyncio.sleep(2)
         page_text = await page.locator('body').inner_text()
+        page_text_lower = page_text.lower()
         
-        # 5. 【全新逻辑】直接用文字匹配判断状态
-        if "Включён" in page_text:
-            print("🎉 服务器当前状态：Включён (运行中/Online)")
+        # 5. 【优化】不区分大小写，同时兼容俄文和英文状态，防止误判
+        if "включён" in page_text_lower or "включен" in page_text_lower or "online" in page_text_lower or "running" in page_text_lower:
+            print("🎉 服务器当前状态：运行中 (Online/Включён)")
             send_tg_message(f"👤 账户: `{account['user']}`\n状态: *Online*\n操作: 无需重启。")
         else:
-            print("⚠️ 当前状态不是 Включён，准备点击 🔄 Рестарт 按钮重启...")
+            print("⚠️ 当前状态不是运行中，准备点击 🔄 Рестарт 按钮重启...")
             try:
-                # 谁带着“Рестарт”这几个字，就直接给它一脚（点击）
-                await page.locator('text=Рестарт').click()
+                # 【优化】加上 .first 明确告诉脚本点击第一个找到的按钮，解决多按钮冲突
+                await page.locator('text=Рестарт').first.click()
                 print("✅ 已成功点击 Рестарт 按钮")
             except Exception as e:
                 print(f"❌ 点击重启按钮失败: {e}")
                 await page.screenshot(path="error_click_restart.png")
                 raise e
             
-            # 确认弹窗（顺便兼容俄语的“确认”叫 Да）
+            # 确认弹窗（同时兼容 俄文"Да"、英文"Yes"、中文"确认"）
             confirm_btn = "//button[contains(text(), '确认') or contains(text(), 'Yes') or contains(text(), 'Да')]"
             if await page.query_selector(confirm_btn):
                 await page.click(confirm_btn)
@@ -86,7 +87,8 @@ async def process_account(account):
             
             # 重新检查页面文字
             page_text_new = await page.locator('body').inner_text()
-            if "Включён" in page_text_new:
+            page_text_new_lower = page_text_new.lower()
+            if "включён" in page_text_new_lower or "включен" in page_text_new_lower or "online" in page_text_new_lower or "running" in page_text_new_lower:
                 send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启成功 ✅\n状态: *Online*")
             else:
                 send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启后状态异常 ⚠️\n请手动登录检查。")
