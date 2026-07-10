@@ -13,6 +13,14 @@ ACCOUNTS_JSON = os.environ.get("ACCOUNTS_JSON")
 
 LOGIN_URL = "https://my.rustix.me/auth/login"
 
+# ============================================================
+# ⚠️ 请注意：因为网站更新，下面这三个 XPath 大概率变了，需要你重新获取并替换！
+# ============================================================
+XPATH_MANAGE_LINK = '//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a'
+XPATH_STATUS_TEXT = '//*[@id="app"]/div[2]/div/div[2]/div[2]/div[3]/div/div/div[1]/div[1]/span'
+XPATH_RESTART_BTN = '//*[@id="app"]/div[2]/div/div[2]/div[2]/div[3]/div/div/div[2]/button[2]'
+# ============================================================
+
 def send_tg_message(text):
     """发送带 Markdown 格式的 Telegram 消息"""
     if not TG_TOKEN or not TG_CHAT_ID:
@@ -44,21 +52,38 @@ async def process_account(account):
         await page.click('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[4]/button')
 
         # 2. 进入管理页
-        await page.wait_for_selector('section', timeout=30000)
-        await page.click('//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a')
-        print("已进入管理页面，等待加载状态...")
-        await asyncio.sleep(30)
+        try:
+            await page.wait_for_selector('section', timeout=30000)
+            await page.click(XPATH_MANAGE_LINK)
+            print("点击了进入管理页面链接，等待页面加载...")
+        except Exception as e:
+            print(f"❌ 无法点击进入管理页链接: {e}")
+            await page.screenshot(path="error_enter_manage.png")
+            raise e
 
-        # 3. 获取状态并判断
-        status_xpath = '//*[@id="app"]/div[2]/div/div[2]/div[2]/div[3]/div/div/div[1]/div[1]/span'
-        await page.wait_for_selector(status_xpath, timeout=20000)
-        status_text = await page.inner_text(status_xpath)
+        # 3. 智能等待状态元素出现 (代替原本死等30秒的旧逻辑)
+        print("🔍 正在定位服务器状态元素...")
+        try:
+            # 缩短初始强制等待，直接依赖 wait_for_selector
+            await asyncio.sleep(5) 
+            await page.wait_for_selector(XPATH_STATUS_TEXT, timeout=25000)
+            status_text = await page.inner_text(XPATH_STATUS_TEXT)
+        except Exception as e:
+            print(f"❌ 找不到服务器状态元素，可能网站结构已改变！正在保存错误截图...")
+            await page.screenshot(path="error_status_not_found.png")
+            raise e
         
+        # 4. 获取状态并判断
         if status_text.strip() == "Online":
             send_tg_message(f"👤 账户: `{account['user']}`\n状态: *Online*\n操作: 无需重启。")
         else:
-            print("状态不是 Online，执行重启...")
-            await page.click('//*[@id="app"]/div[2]/div/div[2]/div[2]/div[3]/div/div/div[2]/button[2]')
+            print(f"当前状态为: {status_text.strip()}，不是 Online，执行重启...")
+            try:
+                await page.click(XPATH_RESTART_BTN)
+            except Exception as e:
+                print(f"❌ 点击重启按钮失败: {e}")
+                await page.screenshot(path="error_click_restart.png")
+                raise e
             
             # 确认弹窗
             confirm_btn = "//button[contains(text(), '确认') or contains(text(), 'Yes')]"
@@ -67,7 +92,7 @@ async def process_account(account):
             
             # 等待2分钟检查重启结果
             await asyncio.sleep(120)
-            status_text_new = await page.inner_text(status_xpath)
+            status_text_new = await page.inner_text(XPATH_STATUS_TEXT)
             if status_text_new.strip() == "Online":
                 send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启成功 ✅\n状态: *Online*")
             else:
