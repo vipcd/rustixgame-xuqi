@@ -3,8 +3,8 @@ import time
 import requests
 from seleniumbase import Driver
 
-# 环境变量读取（自动兼容 TG_TOKEN 与 TG_BOT_TOKEN）
-RUSTIX_URL = os.getenv("RUSTIX_URL", "https://your-rustix-domain.com")
+# 环境变量读取（兼容空字符串回退与变量别名）
+RUSTIX_URL = os.getenv("RUSTIX_URL") or "https://your-rustix-domain.com"
 RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
 RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN") or os.getenv("TG_TOKEN", "")
@@ -49,6 +49,9 @@ def main():
     
     try:
         target_url = RUSTIX_URL.rstrip('/')
+        if not target_url or target_url.startswith("data:"):
+            raise ValueError(f"无效的 RUSTIX_URL 域名配置: '{RUSTIX_URL}'，请检查 GitHub Secrets Secrets.RUSTIX_URL")
+
         print(f"🌐 正在访问目标站点: {target_url}")
         driver.uc_open_with_reconnect(target_url, reconnect_time=6)
         
@@ -60,7 +63,6 @@ def main():
                 driver.uc_gui_click_captcha()
             except Exception as e:
                 print(f"⚠️ 点击模拟触发异常或已自动通过: {e}")
-            
             time.sleep(6)
 
         # 执行登录流程（如配置了账号密码）
@@ -74,6 +76,10 @@ def main():
 
         current_page = driver.current_url
         print(f"📍 当前已加载页面: {current_page}")
+
+        # 保存控制面板页面截图供 Artifact 下载
+        driver.save_screenshot("server_status.png")
+        print("📸 页面截图已保存为 server_status.png")
 
         # 提取浏览器 Cookie 与 User-Agent 上下文
         print("🍪 提取浏览器 Cookie 与 User-Agent 上下文...")
@@ -115,6 +121,11 @@ def main():
     except Exception as e:
         error_info = f"💥 脚本运行过程中发生异常: {str(e)}"
         print(error_info)
+        try:
+            driver.save_screenshot("error_status.png")
+            print("📸 异常状态截图已保存为 error_status.png")
+        except Exception:
+            pass
         send_telegram_msg(f"💥 *Rustix 自动化脚本报错*\n\n`{str(e)}`")
         
     finally:
