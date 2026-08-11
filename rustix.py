@@ -31,7 +31,7 @@ def parse_urls():
     return origin, raw_url, api_url
 
 def send_telegram_msg(message: str):
-    """通过 GitHub 节点直连发送 Telegram 机器人推送"""
+    """发送纯文本 Telegram 通知"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("⚠️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送")
         return
@@ -49,7 +49,7 @@ def send_telegram_msg(message: str):
         print(f"❌ Telegram 发送异常: {e}")
 
 def main():
-    print("🚀 启动 Rustix 自动化控制流程（GitHub 直连模式）...")
+    print("🚀 启动 Rustix 自动化控制流程（浏览器原生 Fetch 模式）...")
     
     try:
         origin_url, target_url, api_url = parse_urls()
@@ -61,11 +61,10 @@ def main():
         send_telegram_msg(err_msg)
         return
 
-    print("🌐 使用 GitHub Actions 原生网络直连启动浏览器...")
     driver = Driver(uc=True, headless=True)
     
     try:
-        print(f"🌐 正在访问目标站点: {target_url}")
+        print(f"🌐 正在通过 Chrome 打开目标站点: {target_url}")
         driver.uc_open_with_reconnect(target_url, reconnect_time=6)
         time.sleep(3)
 
@@ -92,37 +91,49 @@ def main():
         current_url = driver.current_url
         print(f"📍 当前已加载页面: {current_url}")
         driver.save_screenshot("server_status.png")
-        print("📸 页面截图已保存为 server_status.png")
 
-        print("🍪 提取 Cookie 与 User-Agent 上下文...")
-        cookies = driver.get_cookies()
-        user_agent = driver.execute_script("return navigator.userAgent;")
+        print("📡 在 Chrome 浏览器内部直接注入 fetch 执行 API 请求...")
         
-        session = requests.Session()
-        for cookie in cookies:
-            session.cookies.set(cookie['name'], cookie['value'])
-            
-        session.headers.update({
-            "User-Agent": user_agent,
-            "Referer": current_url,
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest"
+        # 使用 Selenium 执行异步 JavaScript JS fetch
+        js_script = """
+        const callback = arguments[arguments.length - 1];
+        const targetApi = arguments[0];
+
+        fetch(targetApi, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json, text/plain, */*'
+            }
         })
+        .then(async (response) => {
+            const text = await response.text();
+            callback({ status: response.status, body: text });
+        })
+        .catch((err) => {
+            callback({ error: err.toString() });
+        });
+        """
 
-        print(f"📡 正在直连请求 API: {api_url}")
-        response = session.post(api_url, timeout=15)
-        print(f"🔍 API 响应状态码: {response.status_code}")
-        
-        if response.status_code == 200:
-            try:
-                res_data = response.json()
-            except Exception:
-                res_data = response.text
-            print(f"✅ API 执行成功: {res_data}")
-            send_telegram_msg(f"✅ Rustix 操作成功\n\n状态码: {response.status_code}\n返回数据: {res_data}")
+        driver.set_script_timeout(20)
+        res = driver.execute_async_script(js_script, api_url)
+
+        if "error" in res:
+            print(f"❌ 浏览器内部 Fetch 执行出错: {res['error']}")
+            send_telegram_msg(f"❌ Rustix 操作失败（浏览器内部 Fetch 异常）\n\n错误信息: {res['error']}")
         else:
-            print(f"❌ API 执行失败: {response.status_code} - {response.text[:300]}")
-            send_telegram_msg(f"❌ Rustix 操作失败\n\n状态码: {response.status_code}\n响应内容: {response.text[:200]}")
+            status_code = res.get("status")
+            body = res.get("body", "")
+            print(f"🔍 API 响应状态码: {status_code}")
+            print(f"🔍 API 响应内容: {body[:300]}")
+
+            if status_code == 200:
+                print("✅ API 执行成功")
+                send_telegram_msg(f"✅ Rustix 操作成功\n\n状态码: {status_code}\n返回数据: {body}")
+            else:
+                print(f"❌ API 执行失败: {status_code}")
+                send_telegram_msg(f"❌ Rustix 操作失败\n\n状态码: {status_code}\n响应内容: {body[:200]}")
 
     except Exception as e:
         error_info = f"💥 脚本运行异常: {str(e)}"
