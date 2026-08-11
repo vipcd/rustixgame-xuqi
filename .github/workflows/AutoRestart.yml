@@ -22,10 +22,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Dependencies, Google Chrome, and Xvfb
+      - name: Install Dependencies and Microsoft Edge
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb google-chrome-stable
+          sudo apt-get install -y xvfb curl gnupg
+          
+          # 添加 Microsoft 官方 Edge 源并安装
+          curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
+          sudo install -o root -g root -m 644 microsoft.gpg /etc/apt/trusted.gpg.d/
+          sudo sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list'
+          sudo rm microsoft.gpg
+          sudo apt-get update
+          sudo apt-get install -y microsoft-edge-stable
+
           pip install --upgrade pip
           pip install playwright requests curl_cffi websockets requests[socks] seleniumbase
           playwright install --with-deps chromium
@@ -35,7 +44,7 @@ jobs:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           set -euo pipefail
-          test -n "$NODE_LINK" || { echo "❌ NODE_LINK 未配置，无法绕过 Access denied 封锁"; exit 1; }
+          test -n "$NODE_LINK" || { echo "❌ NODE_LINK 未配置"; exit 1; }
 
           curl -fL --retry 3 -o sing-box.tar.gz \
             https://github.com/SagerNet/sing-box/releases/download/v1.9.3/sing-box-1.9.3-linux-amd64.tar.gz
@@ -45,7 +54,6 @@ jobs:
 
           python parse_node.py
           
-          # 确保 sing-box 配置中开启了 HTTP 代理端口 10809
           ./sing-box check -c config.json
           nohup ./sing-box run -c config.json > singbox.log 2>&1 &
           echo $! > singbox.pid
