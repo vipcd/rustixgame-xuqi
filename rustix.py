@@ -6,12 +6,11 @@ from seleniumbase import Driver
 
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN") or os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
-PROXY_URL = os.getenv("PROXY_URL", "")
 RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
 RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
 
 def parse_urls():
-    """解析目标域名与 API URL，自动修正路径叠加问题"""
+    """解析面板地址与 API 路径"""
     raw_url = (os.getenv("RUSTIX_URL") or os.getenv("API_KEY") or "").strip()
     if not raw_url or "your-rustix-domain.com" in raw_url:
         raise ValueError("未检测到有效 RUSTIX_URL，请检查 GitHub Secrets 配置。")
@@ -22,7 +21,6 @@ def parse_urls():
     parsed = urlparse(raw_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     
-    # 提取 API 基础路径
     path = parsed.path.rstrip('/')
     if path.endswith('/console'):
         base_path = path[:-8]
@@ -33,21 +31,16 @@ def parse_urls():
     return origin, raw_url, api_url
 
 def send_telegram_msg(message: str):
-    """通过 Telegram 机器人发送纯文本通知"""
+    """通过 GitHub 节点直连发送 Telegram 机器人推送"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("⚠️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送")
         return
     
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT_ID, "text": message}
-    
-    proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 
     try:
-        resp = requests.post(url, json=payload, proxies=proxies, timeout=10)
-        if resp.status_code != 200 and proxies:
-            # 代理发送失败时尝试直连发送
-            resp = requests.post(url, json=payload, timeout=10)
+        resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code == 200:
             print("🟢 Telegram 通知发送成功")
         else:
@@ -55,25 +48,30 @@ def send_telegram_msg(message: str):
     except Exception as e:
         print(f"❌ Telegram 发送异常: {e}")
 
-def run_browser_session(target_url: str, use_proxy: bool):
-    """启动浏览器实例并获取 Session 上下文"""
-    driver_kwargs = {"uc": True, "headless": True}
-    if use_proxy and PROXY_URL:
-        driver_kwargs["proxy"] = PROXY_URL
-        print(f"🌐 启用代理打开浏览器: {PROXY_URL}")
-    else:
-        print("🌐 使用 GitHub Actions 直连打开浏览器")
+def main():
+    print("🚀 启动 Rustix 自动化控制流程（GitHub 直连模式）...")
+    
+    try:
+        origin_url, target_url, api_url = parse_urls()
+        print(f"🌐 面板主页: {target_url}")
+        print(f"📡 目标 API 地址: {api_url}")
+    except Exception as e:
+        err_msg = f"💥 配置校验错误: {str(e)}"
+        print(err_msg)
+        send_telegram_msg(err_msg)
+        return
 
-    driver = Driver(**driver_kwargs)
+    print("🌐 使用 GitHub Actions 原生网络直连启动浏览器...")
+    driver = Driver(uc=True, headless=True)
+    
     try:
         print(f"🌐 正在访问目标站点: {target_url}")
         driver.uc_open_with_reconnect(target_url, reconnect_time=6)
         time.sleep(3)
 
-        # 检查是否遭遇连接重置/打不开页面
         page_source = driver.page_source
         if "ERR_CONNECTION_CLOSED" in page_source or "This site can’t be reached" in page_source:
-            raise ConnectionError("浏览器加载页面失败，目标节点被拒连 (ERR_CONNECTION_CLOSED)")
+            raise ConnectionError("页面加载失败，目标站点拒连")
 
         if "Just a moment" in page_source or "Cloudflare" in page_source:
             print("🛡️ 检测到 Cloudflare 屏障，执行模拟点击...")
@@ -91,50 +89,16 @@ def run_browser_session(target_url: str, use_proxy: bool):
                 driver.click("button[type='submit']")
                 time.sleep(5)
 
+        current_url = driver.current_url
+        print(f"📍 当前已加载页面: {current_url}")
         driver.save_screenshot("server_status.png")
+        print("📸 页面截图已保存为 server_status.png")
+
+        print("🍪 提取 Cookie 与 User-Agent 上下文...")
         cookies = driver.get_cookies()
         user_agent = driver.execute_script("return navigator.userAgent;")
-        current_url = driver.current_url
         
-        return driver, cookies, user_agent, current_url
-    except Exception:
-        driver.save_screenshot("error_status.png")
-        driver.quit()
-        raise
-
-def main():
-    print("🚀 启动 Rustix 自动化控制流程...")
-    
-    try:
-        origin_url, target_url, api_url = parse_urls()
-        print(f"🌐 面板主页: {target_url}")
-        print(f"📡 目标 API 地址: {api_url}")
-    except Exception as e:
-        err_msg = f"💥 配置校验错误: {str(e)}"
-        print(err_msg)
-        send_telegram_msg(err_msg)
-        return
-
-    # 优先尝试使用代理访问，若连接断开则自动降级为直连
-    driver = None
-    use_proxy = bool(PROXY_URL)
-    
-    try:
-        try:
-            driver, cookies, user_agent, current_url = run_browser_session(target_url, use_proxy=use_proxy)
-        except ConnectionError as ce:
-            if use_proxy:
-                print(f"⚠️ 代理节点无法连接目标站点 ({ce})，正在降级为直连模式重试...")
-                use_proxy = False
-                driver, cookies, user_agent, current_url = run_browser_session(target_url, use_proxy=False)
-            else:
-                raise
-
-        print("🍪 提取 Cookie 与 User-Agent，准备构建 API 请求...")
         session = requests.Session()
-        if use_proxy and PROXY_URL:
-            session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
-
         for cookie in cookies:
             session.cookies.set(cookie['name'], cookie['value'])
             
@@ -145,7 +109,7 @@ def main():
             "X-Requested-With": "XMLHttpRequest"
         })
 
-        print(f"📡 正在请求 API: {api_url}")
+        print(f"📡 正在直连请求 API: {api_url}")
         response = session.post(api_url, timeout=15)
         print(f"🔍 API 响应状态码: {response.status_code}")
         
@@ -163,11 +127,15 @@ def main():
     except Exception as e:
         error_info = f"💥 脚本运行异常: {str(e)}"
         print(error_info)
+        try:
+            driver.save_screenshot("error_status.png")
+            print("📸 异常状态截图已保存为 error_status.png")
+        except Exception:
+            pass
         send_telegram_msg(f"💥 Rustix 脚本运行报错\n\n{str(e)}")
         
     finally:
-        if driver:
-            driver.quit()
+        driver.quit()
         print("🏁 任务结束。")
 
 if __name__ == "__main__":
