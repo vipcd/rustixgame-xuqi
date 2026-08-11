@@ -10,17 +10,16 @@ RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
 RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
 
 def get_target_url():
-    """自动判断并解析有效的面板 URL，防止误连占位符域名"""
-    url = os.getenv("RUSTIX_URL", "").strip()
-    api_key = os.getenv("API_KEY", "").strip()
+    """自动获取面板 URL，优先读取 RUSTIX_URL，若空则自动尝试从 API_KEY 中提取网址"""
+    url = (os.getenv("RUSTIX_URL") or "").strip()
+    api_key = (os.getenv("API_KEY") or "").strip()
 
     if not url and (api_key.startswith("http://") or api_key.startswith("https://") or "." in api_key):
         url = api_key
 
     if not url or "your-rustix-domain.com" in url:
         raise ValueError(
-            "未获取到有效的面板域名！请在 GitHub 仓库的 Settings -> Secrets 中添加 RUSTIX_URL 变量"
-            "（填入真实的面板网址，例如 https://your-panel-domain.com）"
+            "未检测到面板域名！请检查 GitHub 仓库 Settings -> Secrets 中是否配置了 RUSTIX_URL 或将面板网址填入 API_KEY"
         )
 
     if not url.startswith("http://") and not url.startswith("https://"):
@@ -29,7 +28,7 @@ def get_target_url():
     return url.rstrip('/')
 
 def send_telegram_msg(message: str):
-    """通过 Telegram 机器人发送推送通知"""
+    """通过 Telegram 机器人发送纯文本推送通知（避免 Markdown 解析异常）"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("⚠️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送")
         return
@@ -37,8 +36,7 @@ def send_telegram_msg(message: str):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TG_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
+        "text": message
     }
     
     proxies = None
@@ -97,7 +95,6 @@ def main():
         current_page = driver.current_url
         print(f"📍 当前已加载页面: {current_page}")
 
-        # 截取面板页面截图（上传产物仅保留截图文件）
         driver.save_screenshot("server_status.png")
         print("📸 页面截图已保存为 server_status.png")
 
@@ -131,10 +128,10 @@ def main():
             except Exception:
                 res_data = response.text
             print(f"✅ API 执行成功: {res_data}")
-            send_telegram_msg(f"✅ *Rustix 续期/重启操作成功*\n\n*状态码*: `{response.status_code}`\n*返回数据*: `{res_data}`")
+            send_telegram_msg(f"✅ Rustix 续期/重启操作成功\n\n状态码: {response.status_code}\n返回数据: {res_data}")
         else:
             print(f"❌ API 执行失败，响应内容: {response.text[:300]}")
-            send_telegram_msg(f"❌ *Rustix 操作失败*\n\n*状态码*: `{response.status_code}`\n*响应内容*: `{response.text[:200]}`")
+            send_telegram_msg(f"❌ Rustix 操作失败\n\n状态码: {response.status_code}\n响应内容: {response.text[:200]}")
 
     except Exception as e:
         error_info = f"💥 脚本运行过程中发生异常: {str(e)}"
@@ -144,7 +141,7 @@ def main():
             print("📸 异常状态截图已保存为 error_status.png")
         except Exception:
             pass
-        send_telegram_msg(f"💥 *Rustix 自动化脚本报错*\n\n`{str(e)}`")
+        send_telegram_msg(f"💥 Rustix 自动化脚本报错\n\n{str(e)}")
         
     finally:
         driver.quit()
