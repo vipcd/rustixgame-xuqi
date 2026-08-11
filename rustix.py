@@ -3,12 +3,13 @@ import time
 import requests
 from seleniumbase import Driver
 
-# 1. 环境变量读取（支持本地调试与 GitHub Secrets）
-RUSTIX_URL = os.getenv("RUSTIX_URL", "https://your-rustix-domain.com")  # 替换为实际 Rustix 域名
+# 环境变量读取（自动兼容 TG_TOKEN 与 TG_BOT_TOKEN）
+RUSTIX_URL = os.getenv("RUSTIX_URL", "https://your-rustix-domain.com")
 RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
 RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN") or os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
+PROXY_URL = os.getenv("PROXY_URL", "")
 
 def send_telegram_msg(message: str):
     """通过 Telegram 机器人发送推送通知"""
@@ -22,8 +23,13 @@ def send_telegram_msg(message: str):
         "text": message,
         "parse_mode": "Markdown"
     }
+    
+    proxies = None
+    if PROXY_URL:
+        proxies = {"http": PROXY_URL, "https": PROXY_URL}
+
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        resp = requests.post(url, json=payload, proxies=proxies, timeout=10)
         if resp.status_code == 200:
             print("🟢 Telegram 通知发送成功")
         else:
@@ -34,15 +40,19 @@ def send_telegram_msg(message: str):
 def main():
     print("🚀 启动 Rustix 自动化控制流程...")
     
-    # 2. 初始化 SeleniumBase 防检测浏览器
-    driver = Driver(uc=True, headless=True)
+    driver_kwargs = {"uc": True, "headless": True}
+    if PROXY_URL:
+        driver_kwargs["proxy"] = PROXY_URL
+        print(f"🌐 浏览器网络代理已生效: {PROXY_URL}")
+
+    driver = Driver(**driver_kwargs)
     
     try:
         target_url = RUSTIX_URL.rstrip('/')
         print(f"🌐 正在访问目标站点: {target_url}")
         driver.uc_open_with_reconnect(target_url, reconnect_time=6)
         
-        # 3. 处理 Cloudflare 验证码挑战
+        # 处理 Cloudflare 验证码挑战
         time.sleep(3)
         if "Just a moment" in driver.page_source or "Cloudflare" in driver.page_source:
             print("🛡️ 检测到 Cloudflare 屏障，执行物理模拟点击...")
@@ -51,10 +61,9 @@ def main():
             except Exception as e:
                 print(f"⚠️ 点击模拟触发异常或已自动通过: {e}")
             
-            # 等待 Cloudflare 注入 Cookie 并完成跳转
             time.sleep(6)
 
-        # 4. 执行登录流程（如果存在登录表单）
+        # 执行登录流程（如配置了账号密码）
         if RUSTIX_USERNAME and RUSTIX_PASSWORD:
             print("🔑 尝试执行账号登录...")
             if driver.is_element_visible("input[name='username']"):
@@ -66,12 +75,15 @@ def main():
         current_page = driver.current_url
         print(f"📍 当前已加载页面: {current_page}")
 
-        # 5. 核心修复：提取 Selenium 浏览器中的 Cookie 与 User-Agent，构建 Python Request Session
+        # 提取浏览器 Cookie 与 User-Agent 上下文
         print("🍪 提取浏览器 Cookie 与 User-Agent 上下文...")
         selenium_cookies = driver.get_cookies()
         user_agent = driver.execute_script("return navigator.userAgent;")
         
         session = requests.Session()
+        if PROXY_URL:
+            session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
+
         for cookie in selenium_cookies:
             session.cookies.set(cookie['name'], cookie['value'])
             
@@ -82,8 +94,7 @@ def main():
             "X-Requested-With": "XMLHttpRequest"
         })
 
-        # 6. 使用 Python 原生 Requests 替代浏览器 JS fetch() 发起 API 操作
-        # ⚠️ 请根据 Rustix 实际 API 端点调整 URL 路径（如 /api/server/renew 或 /api/restart）
+        # 使用 Python Requests 请求 API
         api_url = f"{target_url}/api/server/renew"
         print(f"📡 正在通过 Python Session 请求 API: {api_url}")
         
