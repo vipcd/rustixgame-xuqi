@@ -6,6 +6,7 @@ from seleniumbase import Driver
 
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN") or os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
+PROXY_URL = os.getenv("PROXY_URL", "http://127.0.0.1:10809")
 RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
 RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
 
@@ -39,8 +40,12 @@ def send_telegram_msg(message: str):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT_ID, "text": message}
 
+    proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        resp = requests.post(url, json=payload, proxies=proxies, timeout=10)
+        if resp.status_code != 200 and proxies:
+            resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code == 200:
             print("🟢 Telegram 通知发送成功")
         else:
@@ -49,7 +54,7 @@ def send_telegram_msg(message: str):
         print(f"❌ Telegram 发送异常: {e}")
 
 def main():
-    print("🚀 启动 Rustix 自动化控制流程（浏览器原生 Fetch 模式）...")
+    print("🚀 启动 Rustix 自动化控制流程（HTTP 代理通道）...")
     
     try:
         origin_url, target_url, api_url = parse_urls()
@@ -61,19 +66,27 @@ def main():
         send_telegram_msg(err_msg)
         return
 
-    driver = Driver(uc=True, headless=True)
+    driver_kwargs = {"uc": True, "headless": True}
+    if PROXY_URL:
+        driver_kwargs["proxy"] = PROXY_URL
+        print(f"🌐 启用 HTTP 网络代理: {PROXY_URL}")
+
+    driver = Driver(**driver_kwargs)
     
     try:
-        print(f"🌐 正在通过 Chrome 打开目标站点: {target_url}")
+        print(f"🌐 正在通过 Chrome 访问目标站点: {target_url}")
         driver.uc_open_with_reconnect(target_url, reconnect_time=6)
-        time.sleep(3)
+        time.sleep(4)
 
         page_source = driver.page_source
+        if "Access denied" in page_source:
+            raise PermissionError("节点 IP 依然被目标站点拦截 (Access denied)，请尝试更换 NODE_LINK 订阅节点")
+
         if "ERR_CONNECTION_CLOSED" in page_source or "This site can’t be reached" in page_source:
-            raise ConnectionError("页面加载失败，目标站点拒连")
+            raise ConnectionError("代理节点连接异常，页面加载失败")
 
         if "Just a moment" in page_source or "Cloudflare" in page_source:
-            print("🛡️ 检测到 Cloudflare 屏障，执行模拟点击...")
+            print("🛡️ 检测到 Cloudflare 屏障，执行物理点击...")
             try:
                 driver.uc_gui_click_captcha()
             except Exception as e:
@@ -94,7 +107,6 @@ def main():
 
         print("📡 在 Chrome 浏览器内部直接注入 fetch 执行 API 请求...")
         
-        # 使用 Selenium 执行异步 JavaScript JS fetch
         js_script = """
         const callback = arguments[arguments.length - 1];
         const targetApi = arguments[0];
@@ -121,7 +133,7 @@ def main():
 
         if "error" in res:
             print(f"❌ 浏览器内部 Fetch 执行出错: {res['error']}")
-            send_telegram_msg(f"❌ Rustix 操作失败（浏览器内部 Fetch 异常）\n\n错误信息: {res['error']}")
+            send_telegram_msg(f"❌ Rustix 操作失败（Fetch 异常）\n\n错误信息: {res['error']}")
         else:
             status_code = res.get("status")
             body = res.get("body", "")
