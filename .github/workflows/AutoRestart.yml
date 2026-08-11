@@ -30,39 +30,15 @@ jobs:
           pip install playwright requests curl_cffi websockets requests[socks] seleniumbase
           playwright install --with-deps chromium
 
-      - name: Install and start sing-box
-        env:
-          NODE_LINK: ${{ secrets.NODE_LINK }}
-        run: |
-          set -euo pipefail
-          test -n "$NODE_LINK" || { echo "NODE_LINK 未配置"; exit 1; }
-
-          curl -fL --retry 3 -o sing-box.tar.gz \
-            https://github.com/SagerNet/sing-box/releases/download/v1.9.3/sing-box-1.9.3-linux-amd64.tar.gz
-          tar -xzf sing-box.tar.gz
-          mv sing-box-*/sing-box ./sing-box
-          chmod +x ./sing-box
-
-          python parse_node.py
-          ./sing-box check -c config.json
-          nohup ./sing-box run -c config.json > singbox.log 2>&1 &
-          echo $! > singbox.pid
-          sleep 8
-
-          if ! kill -0 "$(cat singbox.pid)" 2>/dev/null; then
-            echo "sing-box 启动失败"
-            cat singbox.log || true
-            exit 1
-          fi
-
       - name: Run Rustix automation
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           API_KEY: ${{ secrets.API_KEY }}
-          PROXY_URL: socks5://127.0.0.1:10808
           RUSTIX_URL: ${{ secrets.RUSTIX_URL }}
+          RUSTIX_USERNAME: ${{ secrets.RUSTIX_USERNAME }}
+          RUSTIX_PASSWORD: ${{ secrets.RUSTIX_PASSWORD }}
         run: xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" python rustix.py
 
       - name: Upload status screenshots
