@@ -3,13 +3,30 @@ import time
 import requests
 from seleniumbase import Driver
 
-# 环境变量读取（兼容空字符串回退与变量别名）
-RUSTIX_URL = os.getenv("RUSTIX_URL") or "https://your-rustix-domain.com"
-RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
-RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN") or os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 PROXY_URL = os.getenv("PROXY_URL", "")
+RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
+RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
+
+def get_target_url():
+    """自动判断并解析有效的面板 URL，防止误连占位符域名"""
+    url = os.getenv("RUSTIX_URL", "").strip()
+    api_key = os.getenv("API_KEY", "").strip()
+
+    if not url and (api_key.startswith("http://") or api_key.startswith("https://") or "." in api_key):
+        url = api_key
+
+    if not url or "your-rustix-domain.com" in url:
+        raise ValueError(
+            "未获取到有效的面板域名！请在 GitHub 仓库的 Settings -> Secrets 中添加 RUSTIX_URL 变量"
+            "（填入真实的面板网址，例如 https://your-panel-domain.com）"
+        )
+
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+
+    return url.rstrip('/')
 
 def send_telegram_msg(message: str):
     """通过 Telegram 机器人发送推送通知"""
@@ -40,6 +57,15 @@ def send_telegram_msg(message: str):
 def main():
     print("🚀 启动 Rustix 自动化控制流程...")
     
+    try:
+        target_url = get_target_url()
+        print(f"🌐 目标站点 URL: {target_url}")
+    except Exception as e:
+        err_msg = f"💥 配置校验错误: {str(e)}"
+        print(err_msg)
+        send_telegram_msg(err_msg)
+        return
+
     driver_kwargs = {"uc": True, "headless": True}
     if PROXY_URL:
         driver_kwargs["proxy"] = PROXY_URL
@@ -48,14 +74,9 @@ def main():
     driver = Driver(**driver_kwargs)
     
     try:
-        target_url = RUSTIX_URL.rstrip('/')
-        if not target_url or target_url.startswith("data:"):
-            raise ValueError(f"无效的 RUSTIX_URL 域名配置: '{RUSTIX_URL}'，请检查 GitHub Secrets Secrets.RUSTIX_URL")
-
         print(f"🌐 正在访问目标站点: {target_url}")
         driver.uc_open_with_reconnect(target_url, reconnect_time=6)
         
-        # 处理 Cloudflare 验证码挑战
         time.sleep(3)
         if "Just a moment" in driver.page_source or "Cloudflare" in driver.page_source:
             print("🛡️ 检测到 Cloudflare 屏障，执行物理模拟点击...")
@@ -65,7 +86,6 @@ def main():
                 print(f"⚠️ 点击模拟触发异常或已自动通过: {e}")
             time.sleep(6)
 
-        # 执行登录流程（如配置了账号密码）
         if RUSTIX_USERNAME and RUSTIX_PASSWORD:
             print("🔑 尝试执行账号登录...")
             if driver.is_element_visible("input[name='username']"):
@@ -77,11 +97,10 @@ def main():
         current_page = driver.current_url
         print(f"📍 当前已加载页面: {current_page}")
 
-        # 保存控制面板页面截图供 Artifact 下载
+        # 截取面板页面截图（上传产物仅保留截图文件）
         driver.save_screenshot("server_status.png")
         print("📸 页面截图已保存为 server_status.png")
 
-        # 提取浏览器 Cookie 与 User-Agent 上下文
         print("🍪 提取浏览器 Cookie 与 User-Agent 上下文...")
         selenium_cookies = driver.get_cookies()
         user_agent = driver.execute_script("return navigator.userAgent;")
@@ -100,7 +119,6 @@ def main():
             "X-Requested-With": "XMLHttpRequest"
         })
 
-        # 使用 Python Requests 请求 API
         api_url = f"{target_url}/api/server/renew"
         print(f"📡 正在通过 Python Session 请求 API: {api_url}")
         
