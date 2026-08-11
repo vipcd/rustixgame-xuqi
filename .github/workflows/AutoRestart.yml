@@ -73,8 +73,7 @@ jobs:
           if-no-files-found: ignore
           path: |
             *.png
-            screenshots/
-            singbox.log
+            screenshots/*.png
 
       - name: Delete old workflow runs
         if: always()
