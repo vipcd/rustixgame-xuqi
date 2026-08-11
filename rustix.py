@@ -54,7 +54,7 @@ def send_telegram_msg(message: str):
         print(f"❌ Telegram 发送异常: {e}")
 
 def main():
-    print("🚀 启动 Rustix 自动化控制流程（HTTP 代理通道）...")
+    print("🚀 启动 Rustix 自动化控制流程（Microsoft Edge 模式）...")
     
     try:
         origin_url, target_url, api_url = parse_urls()
@@ -66,7 +66,8 @@ def main():
         send_telegram_msg(err_msg)
         return
 
-    driver_kwargs = {"uc": True, "headless": True}
+    # 指定启动 Microsoft Edge 浏览器
+    driver_kwargs = {"browser": "edge", "uc": True, "headless": True}
     if PROXY_URL:
         driver_kwargs["proxy"] = PROXY_URL
         print(f"🌐 启用 HTTP 网络代理: {PROXY_URL}")
@@ -74,13 +75,13 @@ def main():
     driver = Driver(**driver_kwargs)
     
     try:
-        print(f"🌐 正在通过 Chrome 访问目标站点: {target_url}")
+        print(f"🌐 正在通过 Edge 访问目标站点: {target_url}")
         driver.uc_open_with_reconnect(target_url, reconnect_time=6)
         time.sleep(4)
 
         page_source = driver.page_source
         if "Access denied" in page_source:
-            raise PermissionError("节点 IP 依然被目标站点拦截 (Access denied)，请尝试更换 NODE_LINK 订阅节点")
+            raise PermissionError("【Access denied】Edge 依然被拦截，确认是代理节点 IP 被面板/Cloudflare 加入了黑名单，请更换 NODE_LINK 订阅节点")
 
         if "ERR_CONNECTION_CLOSED" in page_source or "This site can’t be reached" in page_source:
             raise ConnectionError("代理节点连接异常，页面加载失败")
@@ -105,7 +106,7 @@ def main():
         print(f"📍 当前已加载页面: {current_url}")
         driver.save_screenshot("server_status.png")
 
-        print("📡 在 Chrome 浏览器内部直接注入 fetch 执行 API 请求...")
+        print("📡 在 Edge 浏览器内部注入 fetch 执行 API 请求...")
         
         js_script = """
         const callback = arguments[arguments.length - 1];
