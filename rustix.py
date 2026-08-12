@@ -1,177 +1,114 @@
-import os
-import time
+import asyncio
 import requests
-from urllib.parse import urlparse
-from seleniumbase import Driver
+import os
+import json
+import sys
+from playwright.async_api import async_playwright
 
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN") or os.getenv("TG_TOKEN", "")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
-PROXY_URL = os.getenv("PROXY_URL", "http://127.0.0.1:10809")
-RUSTIX_USERNAME = os.getenv("RUSTIX_USERNAME", "")
-RUSTIX_PASSWORD = os.getenv("RUSTIX_PASSWORD", "")
+# --- 从环境变量读取敏感信息 ---
+TG_TOKEN = os.environ.get("TG_TOKEN")
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
+ACCOUNTS_JSON = os.environ.get("ACCOUNTS_JSON")
 
-# 伪装 Windows 桌面版 Chrome User-Agent，抹去 Linux Headless 特征
-WIN_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+LOGIN_URL = "https://my.rustix.me/auth/login"
 
-def parse_urls():
-    """解析面板地址与 API 路径"""
-    raw_url = (os.getenv("RUSTIX_URL") or os.getenv("API_KEY") or "").strip()
-    if not raw_url or "your-rustix-domain.com" in raw_url:
-        raise ValueError("未检测到有效 RUSTIX_URL，请检查 GitHub Secrets 配置。")
-
-    if not raw_url.startswith("http://") and not raw_url.startswith("https://"):
-        raw_url = "https://" + raw_url
-
-    parsed = urlparse(raw_url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    
-    path = parsed.path.rstrip('/')
-    if path.endswith('/console'):
-        base_path = path[:-8]
-    else:
-        base_path = path
-
-    api_url = f"{origin}{base_path}/api/server/renew"
-    return origin, raw_url, api_url
-
-def send_telegram_msg(message: str):
-    """发送 Telegram 通知"""
-    if not TG_BOT_TOKEN or not TG_CHAT_ID:
-        print("⚠️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送")
+def send_tg_message(text):
+    """发送带 Markdown 格式的 Telegram 消息"""
+    if not TG_TOKEN or not TG_CHAT_ID:
+        print("警告: TG_TOKEN 或 TG_CHAT_ID 未设置，跳过消息发送。")
         return
-    
-    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TG_CHAT_ID, "text": message}
-    proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
-
-    try:
-        resp = requests.post(url, json=payload, proxies=proxies, timeout=10)
-        if resp.status_code != 200 and proxies:
-            resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 200:
-            print("🟢 Telegram 通知发送成功")
-        else:
-            print(f"🔴 Telegram 发送失败: {resp.status_code} - {resp.text}")
-    except Exception as e:
-        print(f"❌ Telegram 发送异常: {e}")
-
-def main():
-    print("🚀 启动 Rustix 自动化控制流程（Chrome UC 伪装模式）...")
-    
-    try:
-        origin_url, target_url, api_url = parse_urls()
-        print(f"🌐 面板主页: {target_url}")
-        print(f"📡 目标 API 地址: {api_url}")
-    except Exception as e:
-        err_msg = f"💥 配置校验错误: {str(e)}"
-        print(err_msg)
-        send_telegram_msg(err_msg)
-        return
-
-    # 重新配置 Chrome 防检测参数
-    driver_kwargs = {
-        "browser": "chrome",
-        "uc": True,
-        "headless": True,
-        "agent": WIN_USER_AGENT,
-        "disable_csp": True,
-    }
-    
-    if PROXY_URL:
-        driver_kwargs["proxy"] = PROXY_URL
-        print(f"🌐 启用代理: {PROXY_URL}")
-
-    driver = Driver(**driver_kwargs)
-    
-    try:
-        print(f"🌐 正在通过 Chrome UC 打开目标站点: {target_url}")
-        driver.uc_open_with_reconnect(target_url, reconnect_time=8)
-        time.sleep(5)
-
-        page_source = driver.page_source
-
-        # 检查是否依然被 Access denied 拦截
-        if "Access denied" in page_source:
-            raise PermissionError("【Access denied】当前代理节点 IP 已被站点/Cloudflare 标记黑名单。请在 parse_node.py 中更换节点，或更新 NODE_LINK 订阅。")
-
-        if "ERR_CONNECTION_CLOSED" in page_source or "This site can’t be reached" in page_source:
-            raise ConnectionError("代理节点连接异常或连不上目标站点")
-
-        if "Just a moment" in page_source or "Cloudflare" in page_source or "Verify you are human" in page_source:
-            print("🛡️ 检测到 Cloudflare 验证屏障，触发模拟人手点击...")
-            try:
-                driver.uc_gui_click_captcha()
-            except Exception as e:
-                print(f"⚠️ 点击模拟触发异常: {e}")
-            time.sleep(6)
-
-        if RUSTIX_USERNAME and RUSTIX_PASSWORD:
-            print("🔑 尝试执行账号登录...")
-            if driver.is_element_visible("input[name='username']"):
-                driver.type("input[name='username']", RUSTIX_USERNAME)
-                driver.type("input[name='password']", RUSTIX_PASSWORD)
-                driver.click("button[type='submit']")
-                time.sleep(5)
-
-        current_url = driver.current_url
-        print(f"📍 当前已加载页面: {current_url}")
-        driver.save_screenshot("server_status.png")
-
-        print("📡 在 Chrome 内部直接注入 JS fetch 发送 API 请求...")
         
-        js_script = """
-        const callback = arguments[arguments.length - 1];
-        const targetApi = arguments[0];
-
-        fetch(targetApi, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Accept': 'application/json, text/plain, */*'
-            }
-        })
-        .then(async (response) => {
-            const text = await response.text();
-            callback({ status: response.status, body: text });
-        })
-        .catch((err) => {
-            callback({ error: err.toString() });
-        });
-        """
-
-        driver.set_script_timeout(20)
-        res = driver.execute_async_script(js_script, api_url)
-
-        if "error" in res:
-            print(f"❌ 浏览器内部 Fetch 执行出错: {res['error']}")
-            send_telegram_msg(f"❌ Rustix 操作失败（Fetch 异常）\n\n错误信息: {res['error']}")
-        else:
-            status_code = res.get("status")
-            body = res.get("body", "")
-            print(f"🔍 API 响应状态码: {status_code}")
-            print(f"🔍 API 响应内容: {body[:300]}")
-
-            if status_code == 200:
-                print("✅ API 执行成功")
-                send_telegram_msg(f"✅ Rustix 操作成功\n\n状态码: {status_code}\n返回数据: {body}")
-            else:
-                print(f"❌ API 执行失败: {status_code}")
-                send_telegram_msg(f"❌ Rustix 操作失败\n\n状态码: {status_code}\n响应内容: {body[:200]}")
-
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    formatted_text = f"*✅ rustix.me服务器自动重启通知*\n\n{text}"
+    payload = {"chat_id": TG_CHAT_ID, "text": formatted_text, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        error_info = f"💥 脚本运行异常: {str(e)}"
-        print(error_info)
+        print(f"发送 TG 消息失败: {e}")
+
+async def process_account(account):
+    """处理单个账户的逻辑"""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        print(f"\n>>> 开始处理账户: {account['user']}")
+        await page.goto(LOGIN_URL)
+
+        # 1. 登录
+        await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[1]/div/input', account['user'])
+        await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[2]/div[2]/div/div/input', account['pwd'])
+        await page.click('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[4]/button')
+
+        # 2. 进入管理页
+        await page.wait_for_selector('section', timeout=30000)
+        await page.click('//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a')
+        print("已进入管理页面，等待加载状态...")
+
+        # 3. 智能等待页面上的“Стоп(停止)”按钮加载出来，说明控制台彻底打开了
+        print("🔍 正在等待控制台面板加载...")
         try:
-            driver.save_screenshot("error_status.png")
-            print("📸 异常状态截图已保存为 error_status.png")
-        except Exception:
-            pass
-        send_telegram_msg(f"💥 Rustix 脚本运行报错\n\n{str(e)}")
+            await page.wait_for_selector('text=Стоп', timeout=25000)
+        except Exception as e:
+            print(f"❌ 页面加载超时，没看到控制台按钮。正在保存错误截图...")
+            await page.screenshot(path="error_page_load.png")
+            raise e
         
-    finally:
-        driver.quit()
-        print("🏁 任务结束。")
+        # 4. 【优化】稍微等 2 秒，确保状态文本和按钮状态彻底刷新完毕
+        await asyncio.sleep(2)
+        page_text = await page.locator('body').inner_text()
+        page_text_lower = page_text.lower()
+        
+        # 5. 【优化】不区分大小写，同时兼容俄文和英文状态，防止误判
+        if "включён" in page_text_lower or "включен" in page_text_lower or "online" in page_text_lower or "running" in page_text_lower:
+            print("🎉 服务器当前状态：运行中 (Online/Включён)")
+            send_tg_message(f"👤 账户: `{account['user']}`\n状态: *Online*\n操作: 无需重启。")
+        else:
+            print("⚠️ 当前状态不是运行中，准备点击 🔄 Рестарт 按钮重启...")
+            try:
+                # 【优化】加上 .first 明确告诉脚本点击第一个找到的按钮，解决多按钮冲突
+                await page.locator('text=Рестарт').first.click()
+                print("✅ 已成功点击 Рестарт 按钮")
+            except Exception as e:
+                print(f"❌ 点击重启按钮失败: {e}")
+                await page.screenshot(path="error_click_restart.png")
+                raise e
+            
+            # 确认弹窗（同时兼容 俄文"Да"、英文"Yes"、中文"确认"）
+            confirm_btn = "//button[contains(text(), '确认') or contains(text(), 'Yes') or contains(text(), 'Да')]"
+            if await page.query_selector(confirm_btn):
+                await page.click(confirm_btn)
+                print("✅ 已点击弹窗确认")
+            
+            # 等待2分钟检查重启结果
+            print("⏳ 等待 2 分钟让服务器缓一缓...")
+            await asyncio.sleep(120)
+            
+            # 重新检查页面文字
+            page_text_new = await page.locator('body').inner_text()
+            page_text_new_lower = page_text_new.lower()
+            if "включён" in page_text_new_lower or "включен" in page_text_new_lower or "online" in page_text_new_lower or "running" in page_text_new_lower:
+                send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启成功 ✅\n状态: *Online*")
+            else:
+                send_tg_message(f"👤 账户: `{account['user']}`\n服务器重启后状态异常 ⚠️\n请手动登录检查。")
+
+        print(f"账户 {account['user']} 操作完成。")
+        await browser.close()
+
+async def main():
+    if not ACCOUNTS_JSON:
+        print("错误: 未找到 ACCOUNTS_JSON 环境变量，请检查 GitHub Secrets 配置。")
+        sys.exit(1)
+        
+    try:
+        accounts = json.loads(ACCOUNTS_JSON)
+        for account in accounts:
+            await process_account(account)
+        send_tg_message("所有账户操作完毕。 🎉")
+    except Exception as e:
+        print(f"脚本运行错误: {str(e)}")
+        send_tg_message(f"⚠️ 脚本运行出现错误，请检查 GitHub Actions 日志。\n错误详情: `{str(e)}`")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
