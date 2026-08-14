@@ -15,7 +15,7 @@ LOGIN_URL = "https://my.rustix.me/auth/login"
 CONSOLE_URL = "https://my.rustix.me/console"
 
 def send_tg_message(text):
-    """发送 Telegram 消息（彻底直连，不走代理，确保报错 100% 能发出）"""
+    """发送 Telegram 消息（彻底直连）"""
     if not TG_TOKEN or not TG_CHAT_ID:
         print("⚠️ 警告: TG_TOKEN 或 TG_CHAT_ID 未设置，跳过消息发送。")
         return
@@ -25,7 +25,6 @@ def send_tg_message(text):
     payload = {"chat_id": TG_CHAT_ID, "text": formatted_text, "parse_mode": "Markdown"}
     
     try:
-        # GitHub Actions 环境在海外，直连 TG 速度最快且最稳定
         resp = requests.post(url, json=payload, timeout=15)
         if resp.status_code == 200:
             print("🟢 TG 消息发送成功")
@@ -33,6 +32,42 @@ def send_tg_message(text):
             print(f"🔴 TG 发送失败，状态码: {resp.status_code}, 返回: {resp.text}")
     except Exception as e:
         print(f"❌ 发送 TG 消息异常: {e}")
+
+def sanitize_cookies(cookies):
+    """清洗导出 Cookie，修复 Playwright 要求的 sameSite 与多余字段"""
+    clean_cookies = []
+    valid_samesite = {"Strict", "Lax", "None"}
+
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        c = cookie.copy()
+
+        # 1. 修复 sameSite 字段
+        if "sameSite" in c and c["sameSite"]:
+            raw_ss = str(c["sameSite"]).lower().strip()
+            if raw_ss in ["strict"]:
+                c["sameSite"] = "Strict"
+            elif raw_ss in ["lax"]:
+                c["sameSite"] = "Lax"
+            elif raw_ss in ["none", "no_restriction"]:
+                c["sameSite"] = "None"
+            else:
+                c.pop("sameSite", None)  # 非标准值直接删除，让 Playwright 自动处理
+        else:
+            c.pop("sameSite", None)
+
+        # 2. 补全 domain 缺失
+        if "domain" not in c and "url" not in c:
+            c["domain"] = ".rustix.me"
+
+        # 3. 移除 Playwright 不支持的拓展字段
+        for key in ["hostOnly", "session", "storeId", "id"]:
+            c.pop(key, None)
+
+        clean_cookies.append(c)
+
+    return clean_cookies
 
 async def process_with_playwright(raw_data):
     async with async_playwright() as p:
@@ -65,12 +100,13 @@ async def process_with_playwright(raw_data):
                     is_cookie_format = True
 
             if is_cookie_format:
-                print("🍪 检测到格式为标准 Cookie 列表，正在注入 Cookie...")
-                await context.add_cookies(raw_data)
+                print("🍪 检测到格式为标准 Cookie 列表，正在清洗并注入 Cookie...")
+                clean_cookies = sanitize_cookies(raw_data)
+                await context.add_cookies(clean_cookies)
+                
                 print("🌐 正在通过 Cookie 访问控制台...")
                 await page.goto(CONSOLE_URL, timeout=60000, wait_until="domcontentloaded")
             else:
-                # 解析账号密码结构
                 account = raw_data[0] if isinstance(raw_data, list) else raw_data
                 user = (
                     account.get('user') or 
@@ -88,9 +124,8 @@ async def process_with_playwright(raw_data):
 
                 page_content = await page.content()
                 if "Access denied" in page_content:
-                    raise PermissionError("Access denied: 节点 IP 被拒绝或拉黑，请在 GitHub Secrets 更换 NODE_LINK 订阅。")
+                    raise PermissionError("Access denied: 节点 IP 被拒绝，请更换 NODE_LINK 订阅。")
 
-                # 模拟填写登录
                 await page.wait_for_selector('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[1]/div/input', timeout=20000)
                 await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[1]/div/input', user)
                 await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[2]/div[2]/div/div/input', pwd)
@@ -108,7 +143,7 @@ async def process_with_playwright(raw_data):
             try:
                 await page.wait_for_selector('text=Стоп', timeout=25000)
             except Exception as e:
-                print("❌ 页面加载超时，未看到控制台按钮，已截图...")
+                print("❌ 页面加载超时，未看到控制台按钮，已保存截图...")
                 await page.screenshot(path="error_page_load.png")
                 raise e
 
