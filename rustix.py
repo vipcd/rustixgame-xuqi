@@ -34,39 +34,33 @@ def send_tg_message(text):
         print(f"❌ 发送 TG 消息异常: {e}")
 
 def sanitize_cookies(cookies):
-    """清洗导出 Cookie，修复 Playwright 要求的 sameSite 与多余字段"""
+    """清洗导出 Cookie，修复 sameSite 与多余字段"""
     clean_cookies = []
-    valid_samesite = {"Strict", "Lax", "None"}
-
     for cookie in cookies:
         if not isinstance(cookie, dict):
             continue
         c = cookie.copy()
 
-        # 1. 修复 sameSite 字段
         if "sameSite" in c and c["sameSite"]:
             raw_ss = str(c["sameSite"]).lower().strip()
-            if raw_ss in ["strict"]:
+            if raw_ss == "strict":
                 c["sameSite"] = "Strict"
-            elif raw_ss in ["lax"]:
+            elif raw_ss == "lax":
                 c["sameSite"] = "Lax"
             elif raw_ss in ["none", "no_restriction"]:
                 c["sameSite"] = "None"
             else:
-                c.pop("sameSite", None)  # 非标准值直接删除，让 Playwright 自动处理
+                c.pop("sameSite", None)
         else:
             c.pop("sameSite", None)
 
-        # 2. 补全 domain 缺失
         if "domain" not in c and "url" not in c:
             c["domain"] = ".rustix.me"
 
-        # 3. 移除 Playwright 不支持的拓展字段
         for key in ["hostOnly", "session", "storeId", "id"]:
             c.pop(key, None)
 
         clean_cookies.append(c)
-
     return clean_cookies
 
 async def process_with_playwright(raw_data):
@@ -92,7 +86,7 @@ async def process_with_playwright(raw_data):
         page = await context.new_page()
 
         try:
-            # 智能判断数据是 Cookie 列表还是 账号密码配置
+            # 判断数据是 Cookie 还是 账号密码配置
             is_cookie_format = False
             if isinstance(raw_data, list) and len(raw_data) > 0:
                 first_item = raw_data[0]
@@ -104,17 +98,18 @@ async def process_with_playwright(raw_data):
                 clean_cookies = sanitize_cookies(raw_data)
                 await context.add_cookies(clean_cookies)
                 
-                print("🌐 正在通过 Cookie 访问控制台...")
+                print(f"🌐 正在通过 Cookie 打开控制台: {CONSOLE_URL}")
                 await page.goto(CONSOLE_URL, timeout=60000, wait_until="domcontentloaded")
+                await asyncio.sleep(4)
+
+                # 检查 Cookie 是否过期（是否被重定向到了登录页）
+                current_url = page.url
+                print(f"📍 当前页面 URL: {current_url}")
+                if "auth/login" in current_url:
+                    raise PermissionError("COOKIES_JSON 中的登录凭证已过期/失效，被退回到了登录页。请在浏览器重新导出更新 COOKIES_JSON。")
             else:
                 account = raw_data[0] if isinstance(raw_data, list) else raw_data
-                user = (
-                    account.get('user') or 
-                    account.get('username') or 
-                    account.get('email') or 
-                    account.get('login') or 
-                    "单账号用户"
-                )
+                user = account.get('user') or account.get('username') or account.get('email') or "单账号用户"
                 pwd = account.get('pwd') or account.get('password') or ""
                 
                 print(f"\n>>> 开始处理账户: {user}")
@@ -131,21 +126,20 @@ async def process_with_playwright(raw_data):
                 await page.fill('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[2]/div[2]/div/div/input', pwd)
                 await page.click('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[4]/button')
 
-            # 进入管理页/控制台
-            await page.wait_for_selector('section', timeout=30000)
-            if not page.url.endswith('/console'):
-                try:
-                    await page.click('//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a', timeout=10000)
-                except Exception:
-                    pass
+                await page.wait_for_selector('section', timeout=30000)
+                if not page.url.endswith('/console'):
+                    try:
+                        await page.click('//*[@id="app"]/div[2]/div/div[3]/div[4]/section/div/div[1]/div[3]/div/div/div[2]/a', timeout=10000)
+                    except Exception:
+                        pass
 
-            print("🔍 正在等待控制台面板加载...")
+            # 统一等待控制台核心按钮（兼容俄文/英文/中文）
+            print("🔍 正在检测控制台运行状态...")
             try:
-                await page.wait_for_selector('text=Стоп', timeout=25000)
-            except Exception as e:
-                print("❌ 页面加载超时，未看到控制台按钮，已保存截图...")
+                await page.wait_for_selector('text=Стоп, text=Рестарт, text=Restart, button', timeout=30000)
+            except Exception:
+                print("⚠️ 未直接检测到控制台按钮，尝试保存截图诊断...")
                 await page.screenshot(path="error_page_load.png")
-                raise e
 
             # 检查运行状态
             await asyncio.sleep(2)
@@ -155,8 +149,11 @@ async def process_with_playwright(raw_data):
                 print("🎉 服务器当前状态：运行中 (Online)")
                 send_tg_message("👤 Rustix 操作通知\n状态: *Online*\n操作: 服务器当前正常运行，无需重启。")
             else:
-                print("⚠️ 当前状态非运行中，正在点击 🔄 Рестарт 按钮...")
-                await page.locator('text=Рестарт').first.click()
+                print("⚠️ 当前状态非运行中，正在尝试重启...")
+                restart_btn = page.locator('text=Рестарт, text=Restart').first
+                if await restart_btn.is_visible():
+                    await restart_btn.click()
+                    print("✅ 已点击 Restart 按钮")
                 
                 confirm_btn = "//button[contains(text(), '确认') or contains(text(), 'Yes') or contains(text(), 'Да')]"
                 if await page.query_selector(confirm_btn):
