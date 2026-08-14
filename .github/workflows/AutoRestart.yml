@@ -66,6 +66,7 @@ jobs:
           RUSTIX_USERNAME: ${{ secrets.RUSTIX_USERNAME }}
           RUSTIX_PASSWORD: ${{ secrets.RUSTIX_PASSWORD }}
           ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+          COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
           PROXY_URL: http://127.0.0.1:10809
         run: xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" python rustix.py
 
