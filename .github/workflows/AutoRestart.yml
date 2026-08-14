@@ -22,21 +22,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Dependencies and Microsoft Edge
+      - name: Install Dependencies and Playwright
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb curl gnupg
-          
-          # 添加 Microsoft 官方 Edge 源并安装
-          curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
-          sudo install -o root -g root -m 644 microsoft.gpg /etc/apt/trusted.gpg.d/
-          sudo sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list'
-          sudo rm microsoft.gpg
-          sudo apt-get update
-          sudo apt-get install -y microsoft-edge-stable
-
+          sudo apt-get install -y xvfb curl
           pip install --upgrade pip
-          pip install playwright requests curl_cffi websockets requests[socks] seleniumbase
+          pip install playwright requests
           playwright install --with-deps chromium
 
       - name: Install and start sing-box
@@ -74,6 +65,7 @@ jobs:
           RUSTIX_URL: ${{ secrets.RUSTIX_URL }}
           RUSTIX_USERNAME: ${{ secrets.RUSTIX_USERNAME }}
           RUSTIX_PASSWORD: ${{ secrets.RUSTIX_PASSWORD }}
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
           PROXY_URL: http://127.0.0.1:10809
         run: xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" python rustix.py
 
