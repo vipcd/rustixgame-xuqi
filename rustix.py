@@ -8,7 +8,8 @@ from playwright.async_api import async_playwright
 # --- 从环境变量读取敏感信息 ---
 TG_TOKEN = os.environ.get("TG_BOT_TOKEN") or os.environ.get("TG_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
-ACCOUNTS_JSON = os.environ.get("ACCOUNTS_JSON")
+# 自动读取 COOKIES_JSON 或 ACCOUNTS_JSON
+ACCOUNTS_JSON = os.environ.get("COOKIES_JSON") or os.environ.get("ACCOUNTS_JSON")
 PROXY_URL = os.environ.get("PROXY_URL", "http://127.0.0.1:10809")
 
 LOGIN_URL = "https://my.rustix.me/auth/login"
@@ -37,7 +38,6 @@ async def process_account(account):
     password = account.get('pwd') or account.get('password', '')
 
     async with async_playwright() as p:
-        # 配置浏览器启动参数与代理设置
         launch_args = {
             "headless": True,
             "args": [
@@ -66,7 +66,7 @@ async def process_account(account):
 
             page_content = await page.content()
             if "Access denied" in page_content:
-                raise PermissionError("Access denied: 节点 IP 已被站点拦截，请尝试在 Secrets 里更换 NODE_LINK 订阅。")
+                raise PermissionError("Access denied: 节点 IP 已被站点拦截，请尝试更换 NODE_LINK 订阅节点。")
 
             # 1. 登录
             await page.wait_for_selector('//*[@id="app"]/div[2]/div/div/div[2]/form/div/div[1]/div/input', timeout=20000)
@@ -136,16 +136,15 @@ async def main():
         try:
             accounts = json.loads(ACCOUNTS_JSON)
         except Exception as e:
-            print(f"⚠️ 解析 ACCOUNTS_JSON 失败: {e}")
+            print(f"⚠️ 解析 JSON 配置失败: {e}")
 
-    # 回退尝试单账号配置
     if not accounts:
         user = os.environ.get("RUSTIX_USERNAME")
         pwd = os.environ.get("RUSTIX_PASSWORD")
         if user and pwd:
             accounts = [{"user": user, "pwd": pwd}]
         else:
-            print("错误: 未找到 ACCOUNTS_JSON 或 RUSTIX_USERNAME/RUSTIX_PASSWORD 环境变量，请检查 GitHub Secrets 配置。")
+            print("错误: 未找到有效账号数据，请检查 Secrets 配置。")
             sys.exit(1)
             
     try:
